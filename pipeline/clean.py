@@ -19,8 +19,12 @@ class DataError(ValueError):
 
 
 def tidy_text(s):
-    # strip outer spaces and squash repeated inner spaces
-    return s.str.strip().str.replace(r"\s+", " ", regex=True)
+    # strip outer spaces, then squash repeated inner spaces (only where there are any, as regex is slow)
+    s = s.str.strip()
+    doubled = s.str.contains("  ", regex=False, na=False)
+    if doubled.any():
+        s[doubled] = s[doubled].str.replace(r"\s+", " ", regex=True)
+    return s
 
 
 def most_common_spelling(s):
@@ -55,7 +59,8 @@ def fix_typos(names):
         match = [c for c in common if one_word_typo(name, c)]
         if match:
             fixes[name] = match[0]
-    return names.replace(fixes), fixes
+    # map is far quicker than replace when there are hundreds of fixes
+    return names.map(fixes).fillna(names), fixes
 
 
 def drop_resent_receipts(df):
@@ -64,8 +69,11 @@ def drop_resent_receipts(df):
     counts = df.value_counts(dropna=False).rename("n").reset_index()
 
     # if every row in a receipt appears 2x (or 3x...), the whole receipt was re-sent
-    times_sent = counts.groupby("invoice_id")["n"].agg(lambda n: np.gcd.reduce(n.to_numpy()))
-    counts["times_sent"] = counts["invoice_id"].map(times_sent)
+    # i.e. each row's count divides evenly by the receipt's smallest count
+    smallest = counts.groupby("invoice_id")["n"].transform("min")
+    even = (counts["n"] % smallest == 0).groupby(counts["invoice_id"]).transform("all")
+    counts["times_sent"] = smallest.where(even, 1)
+    times_sent = counts.groupby("invoice_id")["times_sent"].first()
     counts["keep"] = counts["n"] // counts["times_sent"]
 
     # rebuild the table with the extra copies taken out
