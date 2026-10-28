@@ -1,0 +1,31 @@
+{
+  "snapshot_date": "2026-01-01",
+  "cleaning": {
+    "rows_in": 311042,
+    "duplicate_rows_removed": 2575,
+    "receipts_sent_twice": 794,
+    "test_rows_removed": 221,
+    "test_receipts_removed": 109,
+    "customer_ids_reformatted": 6171,
+    "store_name_text_fixed": 4574,
+    "store_names_corrected": 1356,
+    "product_text_fixed": 4669,
+    "product_typos_fixed": 3269,
+    "product_typo_variants": 368,
+    "prices_with_pound_sign": 4623,
+    "missing_prices_filled": 1192,
+    "uk_format_dates_parsed": 22564,
+    "unreadable_rows_removed": 0,
+    "clock_reset_rows_removed": 624,
+    "out_of_hours_rows_flagged": 932,
+    "clashing_receipts_split": 527,
+    "void_lines_netted": 4462,
+    "lines_fully_voided_or_unmatched": 26,
+    "prices_flagged_suspect": 273,
+    "prices_flagged_discount": 2736,
+    "refund_rows": 5791,
+    "misc_item_rows": 1771,
+    "rows_without_customer": 11602,
+    "rows_out": 294662
+  }
+}

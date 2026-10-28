@@ -1,0 +1,11 @@
+error_type,planted,found
+customer_id_format,6171,6171
+store_mismatch,1356,1356
+missing_price,1192,1192
+clock_reset,624,624
+invoice_clash,527,527
+duplicate_upload,699,794
+test_transaction,109,109
+price_as_text,4628,4623
+out_of_hours,920,932
+void_pair,4471,4462
