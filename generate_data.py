@@ -4,10 +4,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+# two years of trading
 START = pd.Timestamp("2024-01-01")
 END = pd.Timestamp("2025-12-31")
 
-# orders per year, mean extra lines per order, share of customers
+# hidden customer types: visits per year, extra items per basket, share of all customers
 PERSONAS = {
     "loyal":      {"orders_per_year": 30, "extra_lines": 3.0, "share": 0.10},
     "regular":    {"orders_per_year": 12, "extra_lines": 2.0, "share": 0.20},
@@ -16,6 +17,7 @@ PERSONAS = {
     "lapsed":     {"orders_per_year": 10, "extra_lines": 2.0, "share": 0.15},
 }
 
+# category: (styles, item types, typical price in £); every style is paired with every item
 CATEGORIES = {
     "Candles":     (["Vanilla", "Lavender", "Fig", "Cedar", "Sea Salt", "Amber"], ["Jar Candle", "Pillar Candle", "Tealight Set", "Reed Diffuser"], 9),
     "Kitchen":     (["Enamel", "Stoneware", "Bamboo", "Retro", "Copper"], ["Mug", "Teapot", "Utensil Set", "Storage Tin", "Chopping Board"], 12),
@@ -41,6 +43,7 @@ STORES = [
 
 
 def build_products(rng):
+    # build the product list, e.g. "Vanilla Jar Candle", with a price spread around the category's typical price
     rows = []
     for cat, (styles, items, base) in CATEGORIES.items():
         for s in styles:
@@ -51,6 +54,7 @@ def build_products(rng):
 
 
 def day_weights(days):
+    # how busy each day is: run-up to Christmas busier, January and February quieter, weekends busier
     month_boost = {11: 1.4, 12: 1.9, 1: 0.75, 2: 0.85}
     w = np.array([month_boost.get(d.month, 1.0) for d in days])
     w *= np.where(days.dayofweek >= 5, 1.3, 1.0)
@@ -58,6 +62,7 @@ def day_weights(days):
 
 
 def estimate_lines_per_customer():
+    # rough rows per customer, used to work out how many customers give the requested row count
     total = 0.0
     for p in PERSONAS.values():
         if p["orders_per_year"] == 0:
@@ -69,20 +74,24 @@ def estimate_lines_per_customer():
 
 
 def main():
+    # command line options: --rows, --out and --seed (same seed = same data every time)
     ap = argparse.ArgumentParser()
     ap.add_argument("--rows", type=int, default=287_413)
     ap.add_argument("--out", default="data/transactions.csv")
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
+    # one random generator for everything, so results are repeatable
     rng = np.random.default_rng(args.seed)
     days = pd.date_range(START, END, freq="D")
     weights = day_weights(days)
     n_days = len(days)
 
+    # some products sell far more than others
     products = build_products(rng)
     product_p = rng.dirichlet(np.ones(len(products)) * 0.8)
 
+    # create the customers, give each a hidden type and a home store
     n_customers = max(200, int(args.rows / estimate_lines_per_customer()))
     names = list(PERSONAS)
     shares = [PERSONAS[n]["share"] for n in names]
@@ -93,8 +102,10 @@ def main():
     store_p = np.array([s[2] for s in STORES])
     home_store = rng.choice(len(STORES), size=n_customers, p=store_p)
 
+    # decide when each customer shops
     order_cust, order_day = [], []
     for i, p in enumerate(persona):
+        # lapsed customers stop shopping partway through, loyal ones start early, others join any time
         if p == "lapsed":
             start = int(rng.uniform(0, 0.3) * n_days)
             end = int(rng.uniform(0.35, 0.7) * n_days)
@@ -105,12 +116,14 @@ def main():
             start = int(rng.uniform(0, 0.85) * n_days)
             end = n_days
 
+        # number of visits: one-off customers come once, others based on their yearly rate
         if p == "one_off":
             k = 1
         else:
             years = (end - start) / 365
             k = max(1, rng.poisson(PERSONAS[p]["orders_per_year"] * years))
 
+        # pick visit days within their active period, favouring busy days
         w = weights[start:end]
         picked = rng.choice(np.arange(start, end), size=k, p=w / w.sum())
         order_cust.extend([i] * k)
@@ -125,6 +138,7 @@ def main():
     minutes = rng.integers(0, 60, size=n_orders)
     order_ts = days[order_day] + pd.to_timedelta(hours, unit="h") + pd.to_timedelta(minutes, unit="m")
 
+    # put visits in time order so receipt numbers go up with time
     sort_idx = np.argsort(order_ts.values)
     order_cust = order_cust[sort_idx]
     order_ts = order_ts[sort_idx]
@@ -135,18 +149,22 @@ def main():
     order_store[away] = rng.choice(len(STORES), size=away.sum(), p=store_p)
     invoice_ids = np.array([f"INV{i:07d}" for i in range(1, n_orders + 1)])
 
+    # how many items in each basket (loyal customers buy more per visit)
     extra = np.array([PERSONAS[persona[c]]["extra_lines"] for c in order_cust])
     lines = 1 + rng.poisson(extra)
 
+    # one row per item: choose the product, quantity and price paid
     line_order = np.repeat(np.arange(n_orders), lines)
     n_lines = len(line_order)
     prod_idx = rng.choice(len(products), size=n_lines, p=product_p)
 
     qty = rng.choice([1, 2, 3, 4, 6, 12], size=n_lines, p=[0.55, 0.22, 0.1, 0.06, 0.05, 0.02])
     price = products["price"].to_numpy()[prod_idx]
+    # 8% of items bought on a 20% off promotion
     on_sale = rng.random(n_lines) < 0.08
     price = np.where(on_sale, np.round(price * 0.8, 2), price)
 
+    # assemble the clean sales table before any errors are added
     cust_for_line = order_cust[line_order]
     df = pd.DataFrame({
         "invoice_id": invoice_ids[line_order],
@@ -165,20 +183,28 @@ def main():
     refunds = df[refund_mask].copy()
     refunds["invoice_id"] = "RF" + refunds["invoice_id"].str[3:]
     refunds["quantity"] = -refunds["quantity"]
-    refunds["invoice_date"] = refunds["invoice_date"] + pd.to_timedelta(rng.integers(2, 21, len(refunds)), unit="D")
-    elsewhere = rng.random(len(refunds)) < 0.3
-    other = rng.choice(len(STORES), size=elsewhere.sum(), p=store_p)
-    refunds.loc[elsewhere, "store_id"] = store_ids[other]
-    refunds.loc[elsewhere, "store_name"] = store_names[other]
+
+    # one return trip per receipt: same day and same store for all its lines
+    rf_ids = refunds["invoice_id"].unique()
+    delay = dict(zip(rf_ids, rng.integers(2, 21, len(rf_ids))))
+    refunds["invoice_date"] = refunds["invoice_date"] + pd.to_timedelta(refunds["invoice_id"].map(delay), unit="D")
+    moved = rng.random(len(rf_ids)) < 0.3
+    new_store = dict(zip(rf_ids[moved], rng.choice(len(STORES), size=moved.sum(), p=store_p)))
+    swap = refunds["invoice_id"].isin(new_store)
+    idx = refunds.loc[swap, "invoice_id"].map(new_store).to_numpy()
+    refunds.loc[swap, "store_id"] = store_ids[idx]
+    refunds.loc[swap, "store_name"] = store_names[idx]
     refunds = refunds[refunds["invoice_date"] <= END + pd.Timedelta(days=1)]
 
     # shoppers who didn't scan a loyalty card
     no_card = df["invoice_id"].isin(rng.choice(invoice_ids, size=int(n_orders * 0.04), replace=False))
     df.loc[no_card, "customer_id"] = None
 
+    # add the refunds, then mess the data up like a real till system would
     df = pd.concat([df, refunds]).reset_index(drop=True)
     df, errors = add_till_errors(df, rng, products, customer_ids, store_ids, store_names)
 
+    # write dates out as text; the Rochdale till uses UK day/month/year order
     df = df.sort_values("invoice_date", kind="stable").reset_index(drop=True)
     fmt = np.where(df["store_id"] == "S09", "uk", "iso")
     df["invoice_date"] = np.where(
@@ -188,14 +214,17 @@ def main():
     )
     errors.append(("uk_date_format", "S09", "Rochdale till exports dates as dd/mm/yyyy"))
 
+    # share of rows that carry at least one planted error
     err_share = df["_err"].mean()
     any_share = (df["_err"] | (df["store_id"] == "S09")).mean()
     df = df.drop(columns="_err")
 
+    # save the till data
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out, index=False)
 
+    # answer key 1: each customer's real type and home store
     truth = pd.DataFrame({
         "customer_id": customer_ids,
         "home_store": store_names[home_store],
@@ -203,9 +232,11 @@ def main():
     })
     truth.to_csv(out.with_name("customers_truth.csv"), index=False)
 
+    # answer key 2: every error we planted
     log = pd.DataFrame(errors, columns=["error_type", "reference", "detail"])
     log.to_csv(out.with_name("injected_errors.csv"), index=False)
 
+    # summary on screen
     print(f"rows: {len(df):,}")
     print(f"customers: {n_customers:,}")
     print(f"invoices: {n_orders:,}")
@@ -221,6 +252,7 @@ def main():
 
 
 def mark(df, mask_or_idx, errors, kind, detail):
+    # tag the affected rows and record them in the error log
     if isinstance(mask_or_idx, pd.Series):
         idx = df.index[mask_or_idx]
     else:
@@ -230,6 +262,7 @@ def mark(df, mask_or_idx, errors, kind, detail):
 
 
 def typo(word, rng):
+    # swap two neighbouring letters, e.g. Floral -> Floarl
     if len(word) < 4:
         return word
     i = int(rng.integers(1, len(word) - 2))
@@ -238,10 +271,12 @@ def typo(word, rng):
 
 def add_till_errors(df, rng, products, customer_ids, store_ids, store_names):
     errors = []
+    # hidden helper column marking rows we've damaged; removed before saving
     df["_err"] = False
     sales = df[df["quantity"] > 0]
     n = len(sales)
 
+    # choose a random share of sale rows to damage
     def pick(share):
         return rng.choice(sales.index, size=int(n * share), replace=False)
 
@@ -297,6 +332,7 @@ def add_till_errors(df, rng, products, customer_ids, store_ids, store_names):
 
     invs = df.loc[df["invoice_id"].str.startswith("INV"), "invoice_id"].unique()
 
+    # choose a random share of whole receipts to damage
     def pick_invoices(share):
         return rng.choice(invs, size=int(len(invs) * share), replace=False)
 
